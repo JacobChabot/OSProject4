@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/sem.h>
 
+const int n = 18; // max number of processes
 
 // message queue struct
 struct mymsg {
@@ -15,7 +16,7 @@ struct mymsg {
 };
 
 // clock struct
-struct clock {
+struct timer {
 	unsigned int seconds;
 	unsigned int nanoseconds;
 };
@@ -30,25 +31,39 @@ struct pcb {
 int main() {
 	printf("Main\n");
 	
+	struct pcb * processTable; // initialize an array of pcb structs
+	struct timer * clock; // initialize a variable of timer struct
+	key_t key1, key2, key3, key4;
+
 	// generate key and allocate shared memory for clock
-	// clock[0] == seconds
-	// clock[1] == nanoseconds
-	key_t key;
-	/*
-	int shmId;
-	if ((shmId = shmget(key, 2 * sizeof(unsigned int), IPC_CREAT | 0666)) == -1) {
+	int clockId;
+	key1 = ftok("clockkey", 0);
+	if ((clockId = shmget(key1, sizeof(struct timer), IPC_CREAT | 0666)) == -1) {
 		perror("shmget ");
 		exit(1);
 	}
-	unsigned int * clock = (unsigned int *) shmat(shmId, NULL, 0);
-	if (clock == (unsigned int *)(-1)) {
+	clock = (struct timer *) shmat(clockId, NULL, 0);
+	if (clock == (void *)(-1)) {
 		perror("shmat ");
 		exit(1);
-	} */
+	}
+	
+	//generate key and allocate shared mememory for process table
+	int pcbId;
+	key2 = ftok("./oss.c", 0);
+        if ((pcbId = shmget(key2, n * sizeof(struct pcb), IPC_CREAT | 0666)) == -1) {
+                perror("shmget");
+                exit(1);
+        }
+        processTable = (struct pcb *) shmat(pcbId, NULL, 0);
+        if (clock == (void *)(-1)) {
+                perror("shmat ");
+                exit(1);
+        }
 
 	// create semaphore
-	key = ftok("./master.c", 0); // create key using ftok
-	int sem = semget(key, 1, 0600 | IPC_CREAT); // generate semaphore and check for errors 
+	key3 = ftok("semkey", 0); // create key using ftok
+	int sem = semget(key3, 1, 0600 | IPC_CREAT); // generate semaphore and check for errors 
 	if (sem == -1) {
 		perror("semget");
 		exit(0);
@@ -67,9 +82,9 @@ int main() {
 
 	// generate message queue
 	struct mymsg smessage;
-	key = ftok("jacobchabot", 'S');
+	key4 = ftok("msgqkey", 'S');
 	int msgId;
-	if ((msgId = msgget(key, IPC_CREAT | 0666)) == -1) {
+	if ((msgId = msgget(key4, IPC_CREAT | 0666)) == -1) {
 		perror("msgget");
 		exit(1);
 	}
@@ -80,20 +95,24 @@ int main() {
 		perror("msgsnd");
 		exit(1);
 	}
-
-
+	
 
 	// fork
 	pid_t pid = fork();
 	if (pid == 0) {
-		execl("./uprocess.out", "./uprocess.out", NULL);
+		// set process tables entries
+		processTable[0].pid = getpid();
+        	processTable[0].state = 0;
+        	processTable[0].priority = 0;
+		execl("./uprocess.out", "./uprocess.out", NULL); // execute user process and terminate
 		exit(1);
 	}
 	else
 		wait();
 
 	// free memory
-	//shmctl(shmId, IPC_RMID, NULL);
+	shmctl(clockId, IPC_RMID, NULL);
+	shmctl(pcbId, IPC_RMID, NULL);
 
 	// delete semaphore
 	semctl(sem, 0, IPC_RMID);
