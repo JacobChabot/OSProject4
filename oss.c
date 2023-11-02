@@ -7,7 +7,12 @@
 #include <string.h>
 #include <sys/sem.h>
 
-const int n = 18; // max number of processes
+int n = 18; // max number of processes
+
+void help() {
+	printf("help function\n");
+	exit(1);
+}
 
 // message queue struct
 struct mymsg {
@@ -24,12 +29,32 @@ struct timer {
 // process control block struct
 struct pcb {
 	int pid;
-	int state;
+	int state; // 0 = not running, 1 = waiting, 2 = running
 	int priority;
 };
 
-int main() {
+int main(int argc, char * argv[]) {
 	printf("Main\n");
+
+	// case and switch to handle command line arguments
+	char ch;
+	while ((ch = getopt(argc, argv, "hn:t:")) != -1) {
+		switch (ch) {
+			case 'h':
+				help();
+				break;
+			case 'n':				
+				sscanf(optarg, "%d", &n);
+				if ( n > 18) {
+					fprintf(stderr, "\nMax limit of n reached.\n");
+					exit(0);
+				}
+				continue;
+			default:
+				fprintf(stderr, "Unrecononized options!\n");
+				break;
+			}
+	}
 	
 	struct pcb * processTable; // initialize an array of pcb structs
 	struct timer * clock; // initialize a variable of timer struct
@@ -96,19 +121,24 @@ int main() {
 		exit(1);
 	}
 	
+	// simulate scheduling one process 10 times
+	int i;
+	for (i = 0; i < 1; i++) {
+		char temp[2];
+		char nTemp[2];
+		snprintf(temp, sizeof(temp), "%d", i);
+		snprintf(nTemp, sizeof(nTemp), "%d", n);
 
-	// fork
-	pid_t pid = fork();
-	if (pid == 0) {
-		// set process tables entries
-		processTable[0].pid = getpid();
-        	processTable[0].state = 0;
-        	processTable[0].priority = 0;
-		execl("./uprocess.out", "./uprocess.out", NULL); // execute user process and terminate
-		exit(1);
+		// begin forking
+		pid_t pid = fork();
+		if (pid == 0) {
+			// set initial values of state and priority
+                	processTable[i].state = 0; // not running
+                	processTable[i].priority = 0;
+			execl("./uprocess.out", "./uprocess.out", temp, nTemp, NULL); // execute user process
+			exit(1);
+		}
 	}
-	else
-		wait();
 
 	// free memory
 	shmctl(clockId, IPC_RMID, NULL);
