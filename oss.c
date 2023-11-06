@@ -6,6 +6,8 @@
 #include <sys/msg.h>
 #include <string.h>
 #include <sys/sem.h>
+#include <time.h>
+#include <stdbool.h>
 
 int n = 18; // max number of processes
 
@@ -30,7 +32,7 @@ struct timer {
 struct pcb {
 	int pid;
 	int state; // 0 = not running, 1 = waiting, 2 = running
-	int priority;
+	int priority; // 0 = normal process, 1 = high priority process
 };
 
 int main(int argc, char * argv[]) {
@@ -85,7 +87,15 @@ int main(int argc, char * argv[]) {
                 perror("shmat ");
                 exit(1);
         }
-
+	
+	// create process tables for up to n processes
+	srand(time(NULL));
+	int i;
+	for (i = 0; i < n; i++) {
+		processTable[i].state = 1; // waiting
+		processTable[i].priority = (rand() % (2)); // randomly generate if the process will be a normal user process or a high priority process
+	}
+	
 	// create semaphore
 	key3 = ftok("semkey", 0); // create key using ftok
 	int sem = semget(key3, 1, 0600 | IPC_CREAT); // generate semaphore and check for errors 
@@ -121,25 +131,67 @@ int main(int argc, char * argv[]) {
 		exit(1);
 	}
 	
-	// simulate scheduling one process 10 times
-	int i;
-	for (i = 0; i < 1; i++) {
-		char temp[2];
-		char nTemp[2];
-		snprintf(temp, sizeof(temp), "%d", i);
-		snprintf(nTemp, sizeof(nTemp), "%d", n);
+	while (true) {
+		// loop through the process table looking for a high priority process thats waiting
+		bool nprocessExe = false;
+		bool hprocessExe = false;
+		for (i = 0; i < n; i++) {
+			char temp[2];
+                        char nTemp[2];
+                        snprintf(temp, sizeof(temp), "%d", i);
+                        snprintf(nTemp, sizeof(nTemp), "%d", n);
+                        pid_t pid;
 
-		// begin forking
-		pid_t pid = fork();
-		if (pid == 0) {
-			// set initial values of state and priority
-                	processTable[i].state = 0; // not running
-                	processTable[i].priority = 0;
-			execl("./uprocess.out", "./uprocess.out", temp, nTemp, NULL); // execute user process
-			exit(1);
+			if (processTable[i].priority == 1 && processTable[i].state == 1) {
+				hprocessExe = true; 
+				pid = fork();
+				if (pid == 0) {
+					execl("./uprocess.out", "./uprocess.out", temp, nTemp, NULL);
+					exit(1);
+				}
+			}
 		}
-	}
 
+
+		// if high priority process was not executed, loop again only looking for a process thats waiting
+		if (hprocessExe == false)
+			for (i = 0; i < n; i++) {
+                        	char temp[2];
+                        	char nTemp[2];
+                        	snprintf(temp, sizeof(temp), "%d", i);
+                        	snprintf(nTemp, sizeof(nTemp), "%d", n);
+                        	pid_t pid;
+
+                        	if (processTable[i].state == 1) { // execute process thats waiting
+                                	nprocessExe = true;
+					pid = fork();
+                                	if (pid == 0) {
+                                        	execl("./uprocess.out", "./uprocess.out", temp, nTemp, NULL);
+                                        	exit(1);
+                                	}
+                        	}
+                	}
+
+		sleep(1); // this allows the child process to take control of the semaphore before the parent
+
+		// if a process was executed, wait on semaphore
+		// no point in waiting if a process was not executed
+		if (nprocessExe == true || hprocessExe == true) {
+			struct sembuf semWait = {
+    				.sem_num = 0,
+				.sem_op = -1,
+				.sem_flg = 0
+			};
+			if (semop(sem, &semWait, 1) == -1) { // wait for CS to be open
+				perror("semop failed");
+				exit(0);
+			}
+		}
+	
+	
+	
+	}
+		
 	// free memory
 	shmctl(clockId, IPC_RMID, NULL);
 	shmctl(pcbId, IPC_RMID, NULL);
