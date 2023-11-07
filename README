@@ -1,0 +1,23 @@
+Jacob Chabot Project 4 
+
+This project aimed to create multiple processes and schedule them using different queues. I did not complete this project as best as I would have liked to but I did my best. 
+
+Issues/Bugs:
+
+Occasionally will get a semop error. I believe it would happen on the last process and OSS will have finished and deleted the semaphore before the last process could terminate. Added a 
+sleep(2) to delay OSS enough for the last process to finish.
+
+Items not completed due to time and understanding:
+
+*did not utilize clock
+*did not utilize message queues
+*did not utilze queue's to the extent of the project document requested, at the beginning I thought we just need two queues for the different priorities
+*did not utilize process blocking
+*did not keep track of output statistic 
+
+Git repo can be found at:
+https://github.com/JacobChabot/OSProject4/tree/main
+
+Notes:
+
+Added printf statements in the child process

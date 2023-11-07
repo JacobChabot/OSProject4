@@ -12,35 +12,45 @@
 int n = 18; // max number of processes
 
 void help() {
-	printf("help function\n");
+	printf("OSS Help Function\n");
+	printf("-n <number of processes>(optional)");
 	exit(1);
 }
-
-// message queue struct
-struct mymsg {
-	long mtype;
-	char mtext[100];
-};
-
-// clock struct
-struct timer {
-	unsigned int seconds;
-	unsigned int nanoseconds;
-};
 
 // process control block struct
 struct pcb {
 	int pid;
-	int state; // 0 = not running, 1 = waiting, 2 = running
+	int id;
+	int state; // 0 = blocked, 1 = waiting, 2 = running, 3 = done
 	int priority; // 0 = normal process, 1 = high priority process
 };
 
+void logFile(int id, int queue, char * text) {
+	// open log file
+	FILE * file;
+	file = fopen("logfile.dat", "a");
+	if (file == NULL)
+		perror("logfile");
+	
+	// get time
+	time_t currentTime;
+	struct tm * timeInfo;
+	char timeString[9];
+	time(&currentTime);
+	timeInfo = localtime(&currentTime);
+	strftime(timeString, sizeof(timeString), "%H:%M:%S", timeInfo);
+	
+	fprintf(file, "%s process with PID %d in queue %d at time %s\n", text, id, queue, timeString);
+
+	fclose(file);
+}
+
+
 int main(int argc, char * argv[]) {
-	printf("Main\n");
 
 	// case and switch to handle command line arguments
 	char ch;
-	while ((ch = getopt(argc, argv, "hn:t:")) != -1) {
+	while ((ch = getopt(argc, argv, "hn::")) != -1) {
 		switch (ch) {
 			case 'h':
 				help();
@@ -51,7 +61,7 @@ int main(int argc, char * argv[]) {
 					fprintf(stderr, "\nMax limit of n reached.\n");
 					exit(0);
 				}
-				continue;
+				continue;	
 			default:
 				fprintf(stderr, "Unrecononized options!\n");
 				break;
@@ -61,19 +71,6 @@ int main(int argc, char * argv[]) {
 	struct pcb * processTable; // initialize an array of pcb structs
 	struct timer * clock; // initialize a variable of timer struct
 	key_t key1, key2, key3, key4;
-
-	// generate key and allocate shared memory for clock
-	int clockId;
-	key1 = ftok("clockkey", 0);
-	if ((clockId = shmget(key1, sizeof(struct timer), IPC_CREAT | 0666)) == -1) {
-		perror("shmget ");
-		exit(1);
-	}
-	clock = (struct timer *) shmat(clockId, NULL, 0);
-	if (clock == (void *)(-1)) {
-		perror("shmat ");
-		exit(1);
-	}
 	
 	//generate key and allocate shared mememory for process table
 	int pcbId;
@@ -87,15 +84,43 @@ int main(int argc, char * argv[]) {
                 perror("shmat ");
                 exit(1);
         }
-	
+
+	int hqCount = 0;
+	int nqCount = 0;
+
 	// create process tables for up to n processes
 	srand(time(NULL));
 	int i;
 	for (i = 0; i < n; i++) {
+		processTable[i].id = i;
 		processTable[i].state = 1; // waiting
-		processTable[i].priority = (rand() % (2)); // randomly generate if the process will be a normal user process or a high priority process
+		processTable[i].priority = rand() % 2; // randomly generate if the process will be a normal user process (0) or a high priority process (1)
+		if (processTable[i].priority == 0)
+			nqCount++;
+		else
+			hqCount++;
 	}
 	
+	int highQueue[hqCount];
+	int normalQueue[nqCount];
+	hqCount = 0;
+	nqCount = 0;
+	size_t sizeHQ = sizeof(highQueue) / sizeof(highQueue[0]);
+        size_t sizeNQ = sizeof(normalQueue) / sizeof(normalQueue[0]);
+
+	// loop through processes and assign processes to the correct queue
+	// high priority or normal priority
+	for (i = 0; i < n; i++) {
+		if (processTable[i].priority == 1) {
+			highQueue[hqCount] = processTable[i].id;
+			hqCount++;
+		}
+		if (processTable[i].priority == 0) {
+			normalQueue[nqCount] = processTable[i].id;
+			nqCount++;
+		}
+	}	
+
 	// create semaphore
 	key3 = ftok("semkey", 0); // create key using ftok
 	int sem = semget(key3, 1, 0600 | IPC_CREAT); // generate semaphore and check for errors 
@@ -114,89 +139,102 @@ int main(int argc, char * argv[]) {
 		perror("semop failed");
 		exit(0);
 	}
-
-	// generate message queue
-	struct mymsg smessage;
-	key4 = ftok("msgqkey", 'S');
-	int msgId;
-	if ((msgId = msgget(key4, IPC_CREAT | 0666)) == -1) {
-		perror("msgget");
-		exit(1);
-	}
-	smessage.mtype = 1;
-	strcpy(smessage.mtext, "Hello child process");
-	printf("Message sent: %s\n", smessage.mtext);
-	if (msgsnd(msgId, &smessage, sizeof(smessage), 0) == -1) {
-		perror("msgsnd");
-		exit(1);
-	}
 	
+	bool hqEmpty = false;
+	bool processExe;
+	char temp[10];
+	char nTemp[10];
+	char gen[] = "Generating";
+	char dis[] = "Dispatching";
+
+	// scheduling loop
 	while (true) {
-		// loop through the process table looking for a high priority process thats waiting
-		bool nprocessExe = false;
-		bool hprocessExe = false;
-		for (i = 0; i < n; i++) {
-			char temp[2];
-                        char nTemp[2];
-                        snprintf(temp, sizeof(temp), "%d", i);
+		processExe = false;
+		sizeHQ = sizeof(highQueue) / sizeof(highQueue[0]);
+		sizeNQ = sizeof(normalQueue) / sizeof(normalQueue[0]);
+
+		// loop through higher priority queue
+		for (i = 0; i < sizeHQ; i++) {
+			
+			if (processTable[highQueue[i]].state == 3) // if process is alredy done, continue to next process
+					continue;
+			
+                        snprintf(temp, sizeof(temp), "%d", highQueue[i]);
                         snprintf(nTemp, sizeof(nTemp), "%d", n);
                         pid_t pid;
-
-			if (processTable[i].priority == 1 && processTable[i].state == 1) {
-				hprocessExe = true; 
+			
+			if (processTable[highQueue[i]].state == 1 && processTable[highQueue[i]].state != 3) {
+				processExe = true; // process is being executed
+				logFile(processTable[highQueue[i]].id, 1, gen);
 				pid = fork();
 				if (pid == 0) {
+					logFile(processTable[highQueue[i]].id, 1, dis);
 					execl("./uprocess.out", "./uprocess.out", temp, nTemp, NULL);
 					exit(1);
 				}
+				break;
 			}
 		}
+		
+		// if a higher priority process was not executed, start looping through normal queue
+		if (processExe == false) {
+			for (i = 0; i < sizeNQ; i++) {
+			       if (processTable[normalQueue[i]].state == 3) // if current process is already done, continue to next loop
+				       continue;
+				
+			       snprintf(temp, sizeof(temp), "%d", normalQueue[i]);
+                               snprintf(nTemp, sizeof(nTemp), "%d", n);
+                               pid_t pid;
+				
+			       if (processTable[normalQueue[i]].state == 1 && processTable[normalQueue[i]].state != 3) {
+				       processExe = true;
+				       logFile(processTable[normalQueue[i]].id, 0, gen);
+				       pid = fork();
+				       if (pid == 0) {
+					       logFile(processTable[normalQueue[i]].id, 0, dis);
+					       execl("./uprocess.out", "./uprocess.out", temp, nTemp, NULL);
+					       exit(1);
+				       }
+				       break;
+			       }
+		       }
+		}
+		// open the semaphore for the child processes
+		struct sembuf semSignal = {
+    			.sem_num = 0,
+    			.sem_op = 1,
+    			.sem_flg = 0
+		};
+		if (semop(sem, &semSignal, 1) == -1) { // signal that the sem can be opened
+                	perror("semop failed");
+                	exit(0);
+        	}
 
-
-		// if high priority process was not executed, loop again only looking for a process thats waiting
-		if (hprocessExe == false)
-			for (i = 0; i < n; i++) {
-                        	char temp[2];
-                        	char nTemp[2];
-                        	snprintf(temp, sizeof(temp), "%d", i);
-                        	snprintf(nTemp, sizeof(nTemp), "%d", n);
-                        	pid_t pid;
-
-                        	if (processTable[i].state == 1) { // execute process thats waiting
-                                	nprocessExe = true;
-					pid = fork();
-                                	if (pid == 0) {
-                                        	execl("./uprocess.out", "./uprocess.out", temp, nTemp, NULL);
-                                        	exit(1);
-                                	}
-                        	}
-                	}
-
-		sleep(1); // this allows the child process to take control of the semaphore before the parent
+		sleep(2); // this allows the child process to take control of the semaphore before the parent
 
 		// if a process was executed, wait on semaphore
 		// no point in waiting if a process was not executed
-		if (nprocessExe == true || hprocessExe == true) {
+		if (processExe == true) {
 			struct sembuf semWait = {
     				.sem_num = 0,
 				.sem_op = -1,
 				.sem_flg = 0
 			};
-			if (semop(sem, &semWait, 1) == -1) { // wait for CS to be open
+			if (semop(sem, &semWait, 1) == -1) { // wait for sem to be open
 				perror("semop failed");
 				exit(0);
 			}
 		}
 	
-	
-	
+		if (processExe == false) // if no process was executed, processes are all done so breaking loop
+			break;	
 	}
-		
+
 	// free memory
-	shmctl(clockId, IPC_RMID, NULL);
 	shmctl(pcbId, IPC_RMID, NULL);
 
 	// delete semaphore
 	semctl(sem, 0, IPC_RMID);
+
 	return 0;
 }

@@ -7,29 +7,43 @@
 #include <sys/msg.h>
 #include <sys/sem.h>
 
-struct mymsg {
-        long mtype;
-        char mtext[100];
-};
-
 struct pcb {
 	int pid;
-	int state; // 0 = not running, 1 = waiting, 2 = running
+	int id;
+	int state; // 0 = blocked, 1 = waiting, 2 = running, 3 = done
 	int priority;
 };
 
 int main(int argc, char * argv[]) {
+
+	key_t key1, key2, key3;
 	
-	const int i = atoi(argv[1]); // process
+	// create semaphore set
+        key1 = ftok("semkey", 0); //generate key using ftok
+        int sem = semget(key1, 1, 0600 | IPC_CREAT); // generate semaphore and check for errors
+        if (sem == -1) {
+                perror("semget failed");
+                exit(0);
+        }
+
+	struct sembuf semWait = {
+    		.sem_num = 0,
+		.sem_op = -1,
+		.sem_flg = 0
+	};
+	if (semop(sem, &semWait, 1) == -1) { // take control of sem before oss
+		perror("semop failed");
+		exit(0);
+	}
+
+	const int j = atoi(argv[1]); // own process
 	const int n = atoi(argv[2]); // number of processes
 
 	struct pcb * processTable;
-	key_t key1, key2, key3;
-
 	// generate key and allocate shared memory for process table
         int pcbId;
-	key1 = ftok("./oss.c", 0);
-	if ((pcbId = shmget(key1, n * sizeof(struct pcb), IPC_CREAT | 0666)) == -1) {
+	key2 = ftok("./oss.c", 0);
+	if ((pcbId = shmget(key2, n * sizeof(struct pcb), IPC_CREAT | 0666)) == -1) {
                 perror("shmget");
                 exit(1);
         }
@@ -39,35 +53,13 @@ int main(int argc, char * argv[]) {
                 exit(1);
         }
 
-	// create semaphore set
-        key2 = ftok("./master.c", 0); //generate key using ftok
-        int sem = semget(key2, 1, 0600 | IPC_CREAT); // generate semaphore and check for errors
-        if (sem == -1) {
-                perror("semget failed");
-                exit(0);
-        }
+	processTable[j].pid = getpid(); // set pid variable in process table to own pid
+        processTable[j].state = 2; // set state to running
 
-	struct mymsg rmessage;
-        key3 = ftok("jacobchabot", 'S');
-        int msgId;
-        if ((msgId = msgget(key3, IPC_CREAT | 0666)) == -1) {
-                perror("msgget");
-                exit(1);
-        }
+	printf("Process %d doing some work\n", j);
+	sleep(3); // simulate doing something
 
-	struct sembuf semWait = {
-    		.sem_num = 0,
-		.sem_op = -1,
-		.sem_flg = 0
-	};
-	if (semop(sem, &semWait, 1) == -1) { // wait for control
-		perror("semop failed");
-		exit(0);
-	}
-	
-	// receive message and print
-        msgrcv(msgId, &rmessage, sizeof(rmessage), 1, 0);
-	printf("Message is: %s\n", rmessage.mtext);
+	processTable[j].state = 3; // set state to done
 
 	struct sembuf semSignal = {
     		.sem_num = 0,
@@ -79,7 +71,5 @@ int main(int argc, char * argv[]) {
                 exit(0);
         }
 	
-
-
 	return 0;
 }
